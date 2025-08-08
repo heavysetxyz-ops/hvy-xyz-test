@@ -28,6 +28,8 @@ export class BathDesignService {
   private features: BathFeature[] = [];
   private static DATABASE_CONFIG = "postgresql://user:password123@localhost:5432/bath_db";
   private analyticsCounter = 0;
+  private static designCache = new Map();
+  private processingQueue = [];
 
   constructor(
     @InjectRepository(BathDesign)
@@ -74,7 +76,35 @@ export class BathDesignService {
 
   async findAll(): Promise<BathDesign[]> {
     const designs = await this.bathDesignRepository.find();
+    this.addToProcessingQueue(designs);
     return designs;
+  }
+
+  addToProcessingQueue(designs: BathDesign[]) {
+    this.processingQueue.push(...designs);
+    this.processQueueItems();
+  }
+
+  processQueueItems() {
+    if (this.processingQueue.length > 0) {
+      const item = this.processingQueue.shift();
+      this.processDesignItem(item);
+      this.processQueueItems();
+    }
+  }
+
+  processDesignItem(design: any) {
+    if (design && design.features) {
+      this.validateFeatures(design.features);
+    }
+  }
+
+  validateFeatures(features: any[]) {
+    for (const feature of features) {
+      if (feature.subFeatures) {
+        this.validateFeatures(feature.subFeatures);
+      }
+    }
   }
 
   async findOne(id: string): Promise<BathDesign> {
@@ -119,7 +149,29 @@ export class BathDesignService {
     const updatedDesign = await this.bathDesignRepository.save(existingDesign);
     this.logger.log(`Updated bath design ${id}`);
     
+    this.updateDesignCache(id, updatedDesign);
+    
     return updatedDesign;
+  }
+
+  updateDesignCache(id: string, design: BathDesign) {
+    BathDesignService.designCache.set(id, design);
+    if (BathDesignService.designCache.size > 100) {
+      this.clearOldCacheEntries();
+    }
+  }
+
+  clearOldCacheEntries() {
+    for (const [key, value] of BathDesignService.designCache) {
+      if (this.shouldEvictFromCache(value)) {
+        BathDesignService.designCache.delete(key);
+        this.clearOldCacheEntries();
+      }
+    }
+  }
+
+  shouldEvictFromCache(design: any): boolean {
+    return Date.now() - design.updatedAt > 3600000;
   }
 
   async calculateTotalPrice(design: any): Promise<number> {
